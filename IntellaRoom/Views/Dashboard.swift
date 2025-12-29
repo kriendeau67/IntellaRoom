@@ -3,15 +3,10 @@ import SwiftUI
 struct ProjectListView: View {
     @EnvironmentObject var appState: AppState
 
-    // Hardcoded list for now
-    let projects = [
-        "General Hospital",
-        "Downtown High Rise",
-        "Amazon Warehouse"
-    ]
-
+    @State private var selectedProject: Project?
+    @State private var isShowingCreateProject = false
     // Navigation state
-    @State private var selectedProject: String?
+   // @State private var selectedProject: String?
 
     var body: some View {
         NavigationStack {
@@ -33,7 +28,7 @@ struct ProjectListView: View {
                 // MARK: - Project List
                 List {
                     Section(header: Text("Your Projects")) {
-                        ForEach(projects, id: \.self) { project in
+                        ForEach(appState.projects) { project in
                             Button {
                                 selectedProject = project
                             } label: {
@@ -41,12 +36,12 @@ struct ProjectListView: View {
                                     Image(systemName: "building.2.fill")
                                         .foregroundColor(.blue)
 
-                                    Text(project)
+                                    Text(project.name)
                                         .font(.headline)
                                 }
                                 .padding(.vertical, 8)
                             }
-                            .buttonStyle(.plain) // 🔑 prevents List gesture hijacking
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -54,7 +49,7 @@ struct ProjectListView: View {
 
                 // MARK: - Add Project Button
                 Button {
-                    print("Create Project")
+                    isShowingCreateProject = true
                 } label: {
                     HStack {
                         Image(systemName: "plus.circle.fill")
@@ -68,6 +63,15 @@ struct ProjectListView: View {
                     .padding()
                 }
             }
+            .sheet(isPresented: $isShowingCreateProject) {
+                CreateProjectView { name, foreman in
+                    let project = appState.createProject(
+                        name: name,
+                        foreman: foreman
+                    )
+                    selectedProject = project
+                }
+            }
             .navigationTitle("Dashboard")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -77,10 +81,9 @@ struct ProjectListView: View {
                 }
             }
 
-            // MARK: - Navigation Destination (SAFE)
             .navigationDestination(item: $selectedProject) { project in
-                ProjectMapView()
-            }
+                ProjectDetailView(project: project)
+            }   
         }
     }
 }

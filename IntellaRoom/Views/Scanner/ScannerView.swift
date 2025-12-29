@@ -1,48 +1,46 @@
 import SwiftUI
 
 struct ScannerView: View {
-    let roomName: String
-    let x: Int
-    let y: Int
+    let room: Room
 
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 24) {
-            ProgressView()
-                .scaleEffect(1.5)
+            Text("Scanning \(room.name)")
+                .font(.title2)
+                .bold()
 
-            Text("Processing scan…")
-                .font(.headline)
+            Text("Pin: (\(room.pinX), \(room.pinY))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            Text("Generating wall images")
-                .foregroundColor(.gray)
+            Button("Simulate Scan") {
+                simulateScan()
+            }
+            .buttonStyle(.borderedProminent)
         }
-        .onAppear {
-            simulateScan()
-        }
+        .padding()
     }
+
 
     private func simulateScan() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            let scanId = UUID()
 
-            // Generate 2–4 placeholder images
             let imageCount = Int.random(in: 2...4)
             var fileNames: [String] = []
 
             for index in 1...imageCount {
-                let fileName = "scan-\(scanId)-wall-\(index).jpg"
+                let fileName = "scan-\(UUID().uuidString)-wall-\(index).jpg"
                 savePlaceholderImage(named: fileName)
                 fileNames.append(fileName)
             }
 
             appState.addScan(
-                id: scanId,
-                roomName: roomName,
-                x: x,
-                y: y,
+                projectId: room.projectId,
+                pdfId: room.pdfId,
+                roomId: room.id,
                 imageFileNames: fileNames
             )
 

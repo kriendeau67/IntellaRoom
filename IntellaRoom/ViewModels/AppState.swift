@@ -1,52 +1,111 @@
-//
-//  AppState.swift
-//  IntellaRoom
-//
-//  Created by Kenneth Riendeau on 12/24/25.
-//
 import SwiftUI
 import Combine
 
-// This is the "Brain" of the app.
-// It is an ObservableObject, meaning when it changes, the UI updates automatically.
-class AppState: ObservableObject {
-    
-    // @Published means "Announce this change to the whole app"
+final class AppState: ObservableObject {
+
     @Published var isLoggedIn: Bool = false
     @Published var currentUser: String? = nil
+
+    // NEW: first-class rooms (green pins)
+    @Published var rooms: [Room] = []
+
+    // Scans always belong to a room
     @Published var savedScans: [Scan] = []
-    // A simple function to simulate logging in (we will connect Firebase later)
+    @Published var projects: [Project] = []
+
+    func createProject(name: String, foreman: String) -> Project {
+        let project = Project(
+            id: UUID(),
+            name: name,
+            foreman: foreman,
+            createdAt: Date()
+        )
+        projects.append(project)
+        return project
+    }
+
+    // MARK: - Auth (placeholder)
+
     func login(username: String) {
-        // Simulate network delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.currentUser = username
             self.isLoggedIn = true
         }
     }
-    
+
     func logout() {
         self.currentUser = nil
         self.isLoggedIn = false
     }
-    // Updated Helper
+
+    // MARK: - Room + Scan Lifecycle (NEW MODEL)
+
+    /// Create a Room when the green pin is dropped.
+    /// pinX/pinY should be normalized (0...1) relative to the PDF view.
+    @discardableResult
+    func createRoom(
+        projectId: String,
+        pdfId: String,
+        name: String,
+        pinX: Double,
+        pinY: Double
+    ) -> Room {
+        let room = Room(
+            id: UUID().uuidString,
+            projectId: projectId,
+            pdfId: pdfId,
+            name: name,
+            pinX: pinX,
+            pinY: pinY,
+            createdAt: Date()
+        )
+
+        rooms.append(room)
+
+        print("🟢 Room created: \(name) @ (\(pinX), \(pinY))")
+        return room
+    }
+
+    /// Add a Scan to an existing Room.
     func addScan(
-        id: UUID,
-        roomName: String,
-        x: Int,
-        y: Int,
+        projectId: String,
+        pdfId: String,
+        roomId: String,
         imageFileNames: [String]
     ) {
+        // Safety: prevent orphan scans
+        guard rooms.contains(where: { $0.id == roomId }) else {
+            assertionFailure("Attempted to add scan to non-existent roomId: \(roomId)")
+            print("❌ Scan NOT saved — roomId not found: \(roomId)")
+            return
+        }
+
         let newScan = Scan(
-            id: id,
-            roomName: roomName,
-            x: x,
-            y: y,
-            date: Date(),
-            imageFileNames: imageFileNames
+            id: UUID().uuidString,
+            projectId: projectId,
+            pdfId: pdfId,
+            roomId: roomId,
+            imageFileNames: imageFileNames,
+            capturedAt: Date()
         )
 
         savedScans.append(newScan)
 
-        print("💾 Scan saved! Room: \(roomName), Images: \(imageFileNames.count)")
+        print("💾 Scan saved! roomId: \(roomId), Images: \(imageFileNames.count)")
+    }
+    func deleteRoom(_ room: Room) {
+        // delete associated scan + images if needed
+        rooms.removeAll { $0.id == room.id }
+    }
+    // MARK: - Helpers (useful for UI)
+
+    func room(for scan: Scan) -> Room? {
+        rooms.first(where: { $0.id == scan.roomId })
+    }
+
+    func scans(in room: Room) -> [Scan] {
+        savedScans
+            .filter { $0.roomId == room.id }
+            .sorted { $0.capturedAt < $1.capturedAt }
     }
 }

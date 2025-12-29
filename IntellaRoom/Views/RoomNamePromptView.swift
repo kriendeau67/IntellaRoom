@@ -16,7 +16,7 @@ struct RoomNamePromptView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                Text("Enter Room Name")
+                Text("Enter Room Name/Number")
                     .font(.title2)
                     .bold()
 

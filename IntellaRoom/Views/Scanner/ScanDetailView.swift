@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ScanDetailView: View {
     let scan: Scan
-
+    let room: Room
     @State private var selectedIndex: Int = 0
 
     // Helper: reconstruct file URLs from filenames
@@ -15,7 +15,7 @@ struct ScanDetailView: View {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return formatter.string(from: scan.date)
+        return formatter.string(from: scan.capturedAt)
     }
 
     var body: some View {
@@ -27,7 +27,7 @@ struct ScanDetailView: View {
                     .foregroundColor(.blue)
                     .padding(.top, 12)
 
-                Text(scan.roomName)
+                Text(scan.roomId)
                     .font(.title2)
                     .fontWeight(.semibold)
                     .multilineTextAlignment(.center)
@@ -40,8 +40,10 @@ struct ScanDetailView: View {
 
             // Metadata
             VStack(alignment: .leading, spacing: 10) {
-                Label("PDF Location: (\(scan.x), \(scan.y))", systemImage: "map")
-                Label("Wall Images: \(scan.imageFileNames.count)", systemImage: "square.grid.2x2")
+               // Label("Wall Images: \(scan.imageFileNames.count)", systemImage: "square.grid.2x2")
+                Label("PDF Location: (\(room.pinX), \(room.pinY))",
+                    systemImage: "map"
+                )
             }
             .padding()
             .background(Color.gray.opacity(0.1))
