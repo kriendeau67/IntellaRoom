@@ -6,8 +6,10 @@
 //
 import Foundation
 
-struct Drawing: Identifiable {
+struct Drawing: Identifiable, Codable, Hashable {
     let id: UUID
-    let name: String
-    let url: URL
+    let projectId: UUID
+    var name: String
+    let localURL: URL
+    let createdAt: Date
 }

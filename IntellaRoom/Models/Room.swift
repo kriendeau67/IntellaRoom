@@ -10,7 +10,8 @@ import Foundation
 struct Room: Identifiable, Codable, Hashable {
     let id: String
     let projectId: String
-    let pdfId: String
+    let drawingId: UUID
+   // let pdfId: String
 
     var name: String
     var pinX: Double     // normalized 0–1

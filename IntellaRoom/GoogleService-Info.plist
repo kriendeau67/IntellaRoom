@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>638366381656-ovcud5k3g7ck381q11u2v0usc5cqdaer.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.638366381656-ovcud5k3g7ck381q11u2v0usc5cqdaer</string>
+	<key>API_KEY</key>
+	<string>AIzaSyAJfqn9rkPqXSpzlI8cZhl55D_cYVPm6O4</string>
+	<key>GCM_SENDER_ID</key>
+	<string>638366381656</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.KennethRIendeau.IntellaRoom</string>
+	<key>PROJECT_ID</key>
+	<string>intellaroom-6b668</string>
+	<key>STORAGE_BUCKET</key>
+	<string>intellaroom-6b668.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:638366381656:ios:3fa347bfe9fc7079b3bc2d</string>
+</dict>
+</plist>

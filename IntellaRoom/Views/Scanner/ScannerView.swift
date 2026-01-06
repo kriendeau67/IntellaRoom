@@ -39,7 +39,7 @@ struct ScannerView: View {
 
             appState.addScan(
                 projectId: room.projectId,
-                pdfId: room.pdfId,
+             //   pdfId: room.pdfId,
                 roomId: room.id,
                 imageFileNames: fileNames
             )

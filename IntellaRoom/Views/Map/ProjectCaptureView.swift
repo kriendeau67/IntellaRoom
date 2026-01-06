@@ -56,8 +56,8 @@ struct ProjectCaptureView: View {
                         guard let point = pendingPinPoint else { return }
 
                         let room = appState.createRoom(
-                            projectId: "demoProject",
-                            pdfId: "demoPdf",
+                            projectId: drawing.projectId,
+                            drawingId: drawing.id,
                             name: pendingRoomName,
                             pinX: point.x,
                             pinY: point.y

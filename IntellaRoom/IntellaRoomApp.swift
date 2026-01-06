@@ -6,12 +6,17 @@
 //
 
 import SwiftUI
+import FirebaseCore
+import FirebaseAuth
+
 
 @main
-struct RoughInInspectorApp: App {
-    // 1. Initialize the "Brain" exactly once here.
-    // @StateObject ensures it stays alive for the entire life of the app.
+struct IntellaRoomApp: App {
+    
+   
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var appState = AppState()
+    @StateObject private var authService = AuthService()
     
     var body: some Scene {
         WindowGroup {
@@ -20,6 +25,9 @@ struct RoughInInspectorApp: App {
             Group {
                 if appState.isLoggedIn {
                     ProjectListView()
+                        .onAppear {
+                                            appState.loadProjectsForCurrentUser()
+                                        }
                         // Add a transition so it doesn't just snap harshly
                         .transition(.move(edge: .trailing))
                 } else {
@@ -27,9 +35,15 @@ struct RoughInInspectorApp: App {
                         .transition(.move(edge: .leading))
                 }
             }
+            
             // 3. Inject the Brain into the environment
             // Now EVERY view inside this group can access 'appState'
             .environmentObject(appState)
+            .environmentObject(authService)
+            .onReceive(authService.$user) { user in
+                appState.isLoggedIn = (user != nil)
+                appState.currentUser = user?.displayName ?? user?.email ?? "User"
+            }
             .animation(.default, value: appState.isLoggedIn)
         }
     }

@@ -1,54 +1,35 @@
 import SwiftUI
 
 enum ProjectTab: Hashable {
-    case info
+    case drawings
     case capture
     case reports
 }
 
 struct ProjectDetailView: View {
     let project: Project
-
+    @EnvironmentObject var appState: AppState
     @State private var selectedTab: ProjectTab = .capture
-    @State private var drawings: [Drawing] = [
-        Drawing(
-            id: UUID(),
-            name: "Sample Drawing",
-            url: Bundle.main.url(forResource: "sample", withExtension: "pdf")!
-        )
-    ]
-
-    @State private var activeDrawingId: UUID?
+   // @State private var drawings: [Drawing] = []
+    
+  
     private var activeDrawing: Drawing? {
-        drawings.first { $0.id == activeDrawingId }
+        guard let id = appState.activeDrawingId else { return nil }
+        return appState.drawings.first { $0.id == id }
     }
     var body: some View {
         TabView(selection: $selectedTab) {
 
-            // MARK: - Info
+            // MARK: - Drawings
             NavigationStack {
-                VStack(spacing: 16) {
-                    Text(project.name)
-                        .font(.largeTitle)
-                        .bold()
-
-                    Text("Foreman: \(project.foreman)")
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-                }
-                .padding()
-                .navigationTitle("Info")
-                
-                .safeAreaInset(edge: .top) {
-                            Divider()
-                        }
+                ProjectDrawingsView(project: project)
+                    .environmentObject(appState)
             }
             .tabItem {
-                Label("Info", systemImage: "info.circle")
+                Label("Drawings", systemImage: "doc")
             }
-            .tag(ProjectTab.info)
-
+            .tag(ProjectTab.drawings)
+            
             // MARK: - Capture
             NavigationStack {
                 Group {
@@ -87,11 +68,13 @@ struct ProjectDetailView: View {
             }
             .tag(ProjectTab.reports)
         }
-        .onAppear {
+        
+       /* .onAppear {
             if activeDrawingId == nil {
                 activeDrawingId = drawings.first?.id
             }
-        }
+        
+        } */
         
     }
 }

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ProjectListView: View {
     @EnvironmentObject var appState: AppState
-
+    @EnvironmentObject var authService: AuthService
     @State private var selectedProject: Project?
     @State private var isShowingCreateProject = false
     // Navigation state
@@ -76,7 +76,7 @@ struct ProjectListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Logout") {
-                        appState.logout()
+                        try? authService.signOut()
                     }
                 }
             }
