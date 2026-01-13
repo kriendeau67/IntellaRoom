@@ -10,6 +10,7 @@ struct Drawing: Identifiable, Codable, Hashable {
     let id: UUID
     let projectId: UUID
     var name: String
+    let storagePath: String  
     let localURL: URL
     let createdAt: Date
 }

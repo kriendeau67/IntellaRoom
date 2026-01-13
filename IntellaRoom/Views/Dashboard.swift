@@ -5,6 +5,8 @@ struct ProjectListView: View {
     @EnvironmentObject var authService: AuthService
     @State private var selectedProject: Project?
     @State private var isShowingCreateProject = false
+    @State private var projectToDelete: Project?
+    @State private var showDeleteConfirmation = false
     // Navigation state
    // @State private var selectedProject: String?
 
@@ -29,19 +31,25 @@ struct ProjectListView: View {
                 List {
                     Section(header: Text("Your Projects")) {
                         ForEach(appState.projects) { project in
-                            Button {
-                                selectedProject = project
-                            } label: {
-                                HStack {
-                                    Image(systemName: "building.2.fill")
-                                        .foregroundColor(.blue)
+                            HStack {
+                                Image(systemName: "building.2.fill")
+                                    .foregroundColor(.blue)
 
-                                    Text(project.name)
-                                        .font(.headline)
-                                }
-                                .padding(.vertical, 8)
+                                Text(project.name)
+                                    .font(.headline)
                             }
-                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedProject = project
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    projectToDelete = project
+                                    showDeleteConfirmation = true
+                                } label: {
+                                    Text("Delete")
+                                }
+                            }
                         }
                     }
                 }
@@ -83,7 +91,25 @@ struct ProjectListView: View {
 
             .navigationDestination(item: $selectedProject) { project in
                 ProjectDetailView(project: project)
-            }   
+            }
+            .confirmationDialog(
+                "Delete Project?",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete Project", role: .destructive) {
+                    if let project = projectToDelete {
+                        appState.deleteProject(project)
+                        projectToDelete = nil
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {
+                    projectToDelete = nil
+                }
+            } message: {
+                Text("This will permanently delete the project, all drawings, rooms, and scans.")
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ struct ProjectCaptureView: View {
 
     // Selected room when a green pin is tapped
     @State private var selectedRoom: Room?
-
+    @State private var isPDFReady = false
     // Creating a new room
     @State private var pendingRoomName: String = ""
     @State private var pendingPinPoint: CGPoint?
@@ -31,17 +31,26 @@ struct ProjectCaptureView: View {
 
     var body: some View {
         ZStack {
-            PDFKitView(
-                url: drawing.url,
-                rooms: appState.rooms,
-                onAddScanAtPoint: { point in
-                    pendingPinPoint = point
-                    pendingRoomName = ""
-                    activeSheet = .roomPrompt
-                },
-                selectedRoom: $selectedRoom
-            )
-            .ignoresSafeArea()
+            if isPDFReady {
+                PDFKitView(
+                    url: drawing.localURL,
+                    rooms: appState.rooms,
+                    onAddScanAtPoint: { point in
+                        pendingPinPoint = point
+                        pendingRoomName = ""
+                        activeSheet = .roomPrompt
+                    },
+                    selectedRoom: $selectedRoom
+                )
+                .ignoresSafeArea()
+            } else {
+                ProgressView("Loading drawing…")
+            }
+        }
+        .task {
+            await appState.ensureDrawingPDFExists(drawing)
+            isPDFReady = true
+        
         }
         .navigationTitle("Floor Plan")
         .navigationBarTitleDisplayMode(.inline)
@@ -56,7 +65,7 @@ struct ProjectCaptureView: View {
                         guard let point = pendingPinPoint else { return }
 
                         let room = appState.createRoom(
-                            projectId: drawing.projectId,
+                            projectId: drawing.projectId.uuidString,
                             drawingId: drawing.id,
                             name: pendingRoomName,
                             pinX: point.x,

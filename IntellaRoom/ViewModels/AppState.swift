@@ -2,6 +2,8 @@ import SwiftUI
 import Combine
 import FirebaseFirestore
 import FirebaseAuth
+import FirebaseStorage
+
 
 final class AppState: ObservableObject {
     private let db = Firestore.firestore()
@@ -23,10 +25,35 @@ final class AppState: ObservableObject {
         drawings.filter { $0.projectId == project.id }
     }
     
+    @MainActor
+    func ensureDrawingPDFExists(_ drawing: Drawing) async {
+        let path = drawing.localURL.path
+
+        if FileManager.default.fileExists(atPath: path) {
+            print("📄 PDF already exists locally")
+            return
+        }
+
+        print("⬇️ Downloading PDF from Storage")
+
+        let ref = Storage.storage().reference(withPath: drawing.storagePath)
+
+        do {
+            try await ref.writeAsync(toFile: drawing.localURL)
+            print("✅ PDF downloaded to:", drawing.localURL.path)
+        } catch {
+            print("❌ Failed to download PDF:", error.localizedDescription)
+        }
+    }
     func addDrawing(
         from pickedURL: URL,
         to project: Project
-    ) throws -> Drawing {
+    ) async throws -> Drawing {
+
+        guard pickedURL.startAccessingSecurityScopedResource() else {
+            throw NSError(domain: "DrawingImport", code: 1)
+        }
+        defer { pickedURL.stopAccessingSecurityScopedResource() }
 
         let drawingId = UUID()
         let fileName = pickedURL.deletingPathExtension().lastPathComponent
@@ -49,46 +76,191 @@ final class AppState: ObservableObject {
         let destinationURL = projectFolder
             .appendingPathComponent("\(drawingId.uuidString).pdf")
 
-        try FileManager.default.copyItem(
-            at: pickedURL,
-            to: destinationURL
-        )
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
 
-        let drawing = Drawing(
-            id: drawingId,
-            projectId: project.id,
-            name: fileName,
-            localURL: destinationURL,
-            createdAt: Date()
-        )
+        // ✅ Secure copy (your existing logic, unchanged)
+        let coordinator = NSFileCoordinator()
+        var readError: NSError?
+        var writeError: NSError?
 
-        drawings.append(drawing)
+        coordinator.coordinate(
+            readingItemAt: pickedURL,
+            options: [],
+            error: &readError
+        ) { readableURL in
+            do {
+                let data = try Data(contentsOf: readableURL)
+                try data.write(to: destinationURL, options: .atomic)
+            } catch {
+                writeError = error as NSError
+            }
+        }
 
-        print("📄 Drawing added:", drawing.name)
-        return drawing
+        if let error = readError { throw error }
+        if let error = writeError { throw error }
+
+        if !FileManager.default.fileExists(atPath: destinationURL.path) {
+                    print("❌ Local File Error: The PDF was not found at \(destinationURL.path)")
+                    throw NSError(domain: "LocalFile", code: 404, userInfo: [NSLocalizedDescriptionKey: "Local PDF missing"])
+                }
+        
+        // 🔴 NEW: Upload PDF to Firebase Storage
+        // 1. Prepare the Storage Reference
+        let storageRef = Storage.storage().reference().child("projects/\(project.id.uuidString)/drawings/\(drawingId.uuidString).pdf")
+
+                // 2. Perform the Upload and WAIT for it to finish
+                print("📤 Starting upload to: \(storageRef.fullPath)")
+                _ = try await storageRef.putFileAsync(from: destinationURL)
+                print("✅ Upload complete")
+
+                // 3. Create the Drawing object ONLY after upload is successful
+                let drawing = Drawing(
+                    id: drawingId,
+                    projectId: project.id,
+                    name: fileName,
+                    storagePath: storageRef.fullPath,
+                    localURL: destinationURL,
+                    createdAt: Date()
+                )
+
+                // 4. Save metadata to Firestore (Wait for this too)
+        // 1. Upload Binary (Wait for success)
+            _ = try await storageRef.putFileAsync(from: destinationURL)
+
+            // 2. Save Metadata (Wait for success)
+            // This now waits because we made the function async above
+            try await saveDrawingMetadata(drawing, for: project)
+
+            // 3. Update UI (Only after 1 and 2 are 100% finished)
+            await MainActor.run {
+                self.drawings.append(drawing)
+                self.activeDrawingId = drawing.id
+            }
+
+                print("📄 Drawing fully synced & added to UI:", drawing.name)
+                return drawing
     }
+        
     
     func deleteDrawing(_ drawing: Drawing) {
-        // Remove file
-        try? FileManager.default.removeItem(at: drawing.localURL)
-
-        // Remove rooms + scans tied to this drawing
-        rooms.removeAll { $0.drawingId == drawing.id }
-        savedScans.removeAll {
-            room(for: $0)?.drawingId == drawing.id
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("❌ No authenticated user — cannot delete drawing")
+            return
         }
 
-        // Remove drawing
-        drawings.removeAll { $0.id == drawing.id }
+        let drawingRef = db
+            .collection("users")
+            .document(uid)
+            .collection("projects")
+            .document(drawing.projectId.uuidString)
+            .collection("drawings")
+            .document(drawing.id.uuidString)
 
-        if activeDrawingId == drawing.id {
-            activeDrawingId = nil
+        drawingRef.delete { error in
+            if let error = error {
+                print("❌ Failed to delete drawing from Firestore:", error.localizedDescription)
+                return
+            }
+
+            DispatchQueue.main.async {
+                // Remove local PDF file
+                try? FileManager.default.removeItem(at: drawing.localURL)
+
+                // Remove rooms + scans tied to this drawing
+                self.rooms.removeAll { $0.drawingId == drawing.id }
+                self.savedScans.removeAll {
+                    self.room(for: $0)?.drawingId == drawing.id
+                }
+
+                // Remove drawing from local state
+                self.drawings.removeAll { $0.id == drawing.id }
+
+                // Clear active drawing if needed
+                if self.activeDrawingId == drawing.id {
+                    self.activeDrawingId = nil
+                }
+
+                print("🗑️ Drawing fully deleted:", drawing.name)
+            }
         }
-
-        print("🗑️ Drawing deleted:", drawing.name)
     }
     
-    
+    // Fetch Drawings from Firebase DB
+    func loadDrawings(for project: Project) {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("❌ No authenticated user — cannot load drawings")
+            return
+        }
+
+        print("📥 Loading drawings for project:", project.name)
+
+        db.collection("users")
+            .document(uid)
+            .collection("projects")
+            .document(project.id.uuidString)
+            .collection("drawings")
+            .order(by: "createdAt", descending: false)
+            .getDocuments { snapshot, error in
+
+                if let error = error {
+                    print("❌ Failed to load drawings:", error.localizedDescription)
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    print("⚠️ No drawings found")
+                    return
+                }
+
+                let loadedDrawings: [Drawing] = documents.compactMap { doc in
+                    let data = doc.data()
+
+                    guard
+                        let name = data["name"] as? String,
+                        let storagePath = data["storagePath"] as? String,
+                        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue()
+                    else {
+                        print("⚠️ Skipping drawing (missing fields):", doc.documentID)
+                        return nil
+                    }
+
+                    let drawingId = UUID(uuidString: doc.documentID) ?? UUID()
+                    let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+                    let localURL = documentsDir
+                        .appendingPathComponent("Projects")
+                        .appendingPathComponent(project.id.uuidString)
+                        .appendingPathComponent("Drawings")
+                        .appendingPathComponent("\(drawingId.uuidString).pdf")
+
+                    return Drawing(
+                        id: drawingId,
+                        projectId: project.id,
+                        name: name,
+                        storagePath: storagePath,
+                        localURL: localURL,
+                        createdAt: createdAt
+                    )
+                }
+
+                // ✅ UPDATE THE UI FIRST
+                DispatchQueue.main.async {
+                    self.drawings = loadedDrawings
+                    print("✅ Loaded \(loadedDrawings.count) drawings metadata")
+                    
+                    // 🔴 THE MISSING PIECE:
+                    // Now that the UI knows about the drawings, tell the device
+                    // to download any PDFs that don't exist yet (like on your iPad).
+                    Task {
+                        for drawing in loadedDrawings {
+                            await self.ensureDrawingPDFExists(drawing)
+                        }
+                    }
+                }
+            }
+    }
     @discardableResult
     func createProject(name: String, foreman: String) -> Project {
         guard let uid = Auth.auth().currentUser?.uid else {
@@ -124,8 +296,78 @@ final class AppState: ObservableObject {
         projects.insert(project, at: 0)
         return project
     }
+    func deleteProject(_ project: Project) {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("❌ No authenticated user — cannot delete project")
+            return
+        }
 
-    
+        let projectRef = db
+            .collection("users")
+            .document(uid)
+            .collection("projects")
+            .document(project.id.uuidString)
+
+        projectRef.delete { error in
+            if let error = error {
+                print("❌ Failed to delete project from Firestore:", error.localizedDescription)
+                return
+            }
+
+            DispatchQueue.main.async {
+                // Remove local PDFs folder for this project (safe even if missing)
+                let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let projectFolder = documents
+                    .appendingPathComponent("Projects")
+                    .appendingPathComponent(project.id.uuidString)
+
+                try? FileManager.default.removeItem(at: projectFolder)
+
+                // Remove in-memory data
+                self.projects.removeAll { $0.id == project.id }
+                self.drawings.removeAll { $0.projectId == project.id }
+                self.rooms.removeAll { $0.projectId == project.id.uuidString }
+                // Remove scans whose room belonged to this project
+                self.savedScans.removeAll { scan in
+                    self.room(for: scan)?.projectId == project.id.uuidString
+                }
+
+                // Clear active drawing if it belonged to this project
+                if let activeId = self.activeDrawingId,
+                   self.drawings.first(where: { $0.id == activeId }) == nil {
+                    self.activeDrawingId = nil
+                }
+
+                print("🗑️ Project fully deleted:", project.name)
+            }
+        }
+    }
+    private func saveDrawingMetadata(_ drawing: Drawing, for project: Project) async throws {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("❌ No authenticated user")
+            return
+        }
+
+        // We use a dictionary that matches your Firestore structure
+        let data: [String: Any] = [
+            "id": drawing.id.uuidString,
+            "projectId": drawing.projectId.uuidString,
+            "name": drawing.name,
+            "storagePath": drawing.storagePath,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+
+        let docRef = db.collection("users")
+            .document(uid)
+            .collection("projects")
+            .document(project.id.uuidString)
+            .collection("drawings")
+            .document(drawing.id.uuidString)
+
+        // Using 'setData' with 'await' makes the code stop here until Firestore confirms success
+        try await docRef.setData(data)
+        print("💾 Firestore metadata confirmed saved for:", drawing.name)
+    }
 
 
     
