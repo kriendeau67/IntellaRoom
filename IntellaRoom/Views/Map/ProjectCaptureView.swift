@@ -14,14 +14,14 @@ struct ProjectCaptureView: View {
 
     enum ActiveSheet: Identifiable {
         case roomPrompt
-        case scanner(Room)
+        case scanner(Room, Drawing)
 
         var id: String {
             switch self {
             case .roomPrompt:
                 return "roomPrompt"
-            case .scanner(let room):
-                return "scanner-\(room.id)"
+            case .scanner(let room, _):
+                    return "scanner-\(room.id)"
             }
         }
     }
@@ -34,7 +34,8 @@ struct ProjectCaptureView: View {
             if isPDFReady {
                 PDFKitView(
                     url: drawing.localURL,
-                    rooms: appState.rooms,
+                    // Filter rooms to only show pins for THIS drawing
+                    rooms: appState.rooms.filter { $0.drawingId == drawing.id },
                     onAddScanAtPoint: { point in
                         pendingPinPoint = point
                         pendingRoomName = ""
@@ -48,9 +49,16 @@ struct ProjectCaptureView: View {
             }
         }
         .task {
+            // 1. Ensure the PDF is downloaded
             await appState.ensureDrawingPDFExists(drawing)
+            
+            // 2. NEW: Fetch the rooms/pins from Firestore so they appear on the iPad
+            // We wrap this in a project check to get the ID
+            if let project = appState.projects.first(where: { $0.id == drawing.projectId }) {
+                appState.loadRooms(for: project)
+            }
+            
             isPDFReady = true
-        
         }
         .navigationTitle("Floor Plan")
         .navigationBarTitleDisplayMode(.inline)
@@ -72,12 +80,12 @@ struct ProjectCaptureView: View {
                             pinY: point.y
                         )
 
-                        activeSheet = .scanner(room)
+                        activeSheet = .scanner(room, drawing)
                     }
                 )
 
-            case .scanner(let room):
-                ScannerView(room: room)
+            case .scanner(let room, let drawing): // We now "catch" both pieces
+                ScannerView(room: room, drawing: drawing) // Pass both to the scanner
                     .environmentObject(appState)
             }
         }
@@ -125,6 +133,11 @@ private struct RoomScansSheet: View {
             }
             .navigationTitle(room.name)
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // We now load everything for the whole project at once
+               // appState.loadAllProjectScans(projectId: room.projectId)
+                appState.loadAllProjectScans(projectId: project.id.uuidString)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {

@@ -84,6 +84,7 @@ struct ProjectDetailView: View {
             if appState.drawings.isEmpty {
                 Task {
                     await appState.loadDrawings(for: project)
+                    appState.loadRooms(for: project)
                 }
             }
         }

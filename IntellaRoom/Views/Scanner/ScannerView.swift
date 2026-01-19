@@ -2,7 +2,8 @@ import SwiftUI
 
 struct ScannerView: View {
     let room: Room
-
+    let drawing: Drawing
+    
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
@@ -26,24 +27,21 @@ struct ScannerView: View {
 
 
     private func simulateScan() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-
-            let imageCount = Int.random(in: 2...4)
-            var fileNames: [String] = []
-
-            for index in 1...imageCount {
-                let fileName = "scan-\(UUID().uuidString)-wall-\(index).jpg"
-                savePlaceholderImage(named: fileName)
-                fileNames.append(fileName)
-            }
-
-            appState.addScan(
+        // Since addScan is now "async", we wrap it in a Task
+        Task {
+            // 1. Create a fake "Image" to simulate a real photo
+            // In the next step, we'll swap this for the real camera
+            let mockImage = UIImage(systemName: "camera.shutter.button.fill") ?? UIImage()
+            
+            // 2. Call the new addScan logic
+            await appState.addScan(
                 projectId: room.projectId,
-             //   pdfId: room.pdfId,
+                drawingId: drawing.id.uuidString, // We use the drawing we passed in!
                 roomId: room.id,
-                imageFileNames: fileNames
+                images: [mockImage] // Sending a real image object
             )
-
+            
+            // 3. Close the scanner and go back to the map
             dismiss()
         }
     }

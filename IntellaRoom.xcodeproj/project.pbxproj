@@ -450,7 +450,7 @@
 				INFOPLIST_FILE = IntellaRoom/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RoughRecord;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Required for LiDAR scanning rooms.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app uses the camera to capture 360° panoramas of construction rooms for pre-rock documentation.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -487,7 +487,7 @@
 				INFOPLIST_FILE = IntellaRoom/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RoughRecord;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Required for LiDAR scanning rooms.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app uses the camera to capture 360° panoramas of construction rooms for pre-rock documentation.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
