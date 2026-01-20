@@ -86,6 +86,10 @@ struct ProjectDetailView: View {
                     await appState.loadDrawings(for: project)
                     appState.loadRooms(for: project)
                 }
+                // Load Pins
+                appState.loadRooms(for: project)
+                // Load Reports
+                appState.loadAllProjectScans(projectId: project.id.uuidString)
             }
         }
         // Placing the toolbar on the TabView (which is the root of this file)

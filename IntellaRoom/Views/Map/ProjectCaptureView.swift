@@ -136,7 +136,7 @@ private struct RoomScansSheet: View {
             .onAppear {
                 // We now load everything for the whole project at once
                // appState.loadAllProjectScans(projectId: room.projectId)
-                appState.loadAllProjectScans(projectId: project.id.uuidString)
+                appState.loadAllProjectScans(projectId: room.projectId)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

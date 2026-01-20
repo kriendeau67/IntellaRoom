@@ -59,59 +59,57 @@ extension AppState {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let projectIdString = project.id.uuidString
 
-        // 1. Delete the Project Document from Firestore
-        db.collection("users").document(uid)
-            .collection("projects").document(projectIdString)
-            .delete { error in
-                if let error = error {
-                    print("❌ Firestore Delete Error: \(error.localizedDescription)")
-                } else {
-                    print("💾 Firestore Project Document deleted")
-                }
+        // 1. DELETE FLAT SCAN DOCUMENTS & STORAGE FILES
+        // We use the scans currently in memory to wipe both DB and Storage
+        let scansToDelete = savedScans.filter { $0.projectId == projectIdString }
+        for scan in scansToDelete {
+            // Delete each physical file in this scan
+            for fileName in scan.imageFileNames {
+                let storagePath = "projects/\(projectIdString)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/\(fileName)"
+                storage.child(storagePath).delete { _ in }
+                
+                // Delete local file
+                let localURL = scan.getLocalURL(for: fileName)
+                try? FileManager.default.removeItem(at: localURL)
             }
-
-        // 2. Cloud Storage Cleanup (Recursive Delete)
-        let projectStorageRef = storage.child("projects/\(projectIdString)")
-        
-        projectStorageRef.listAll { (result, error) in
-            if let error = error {
-                print("⚠️ Storage List Error: \(error.localizedDescription)")
-                return
-            }
-
-            // Delete any files in the root project folder
-            result?.items.forEach { file in
-                file.delete { _ in print("🗑️ Deleted root file: \(file.name)") }
-            }
-
-            // Dig into sub-folders (like 'drawings') and delete those files too
-            result?.prefixes.forEach { folder in
-                folder.listAll { (subResult, _) in
-                    subResult?.items.forEach { file in
-                        file.delete { _ in print("🗑️ Deleted sub-folder file: \(file.name)") }
-                    }
-                }
-            }
+            // Delete the scan record from the flat collection
+            db.collection("users").document(uid).collection("scans").document(scan.id).delete()
         }
 
-        // 3. Local Folder Cleanup
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let projectFolder = documents.appendingPathComponent("Projects").appendingPathComponent(projectIdString)
+        // 2. DELETE SUB-COLLECTIONS (Rooms & Drawings)
+        // Firestore requires us to delete every document in a sub-collection individually
+        let projectRef = db.collection("users").document(uid).collection("projects").document(projectIdString)
         
-        try? FileManager.default.removeItem(at: projectFolder)
-        print("📂 Local files removed")
+        // Clear Rooms
+        projectRef.collection("rooms").getDocuments { snapshot, _ in
+            snapshot?.documents.forEach { $0.reference.delete() }
+        }
+        
+        // Clear Drawings
+        projectRef.collection("drawings").getDocuments { snapshot, _ in
+            snapshot?.documents.forEach { $0.reference.delete() }
+        }
 
-        // 4. Update UI State
+        // 3. DELETE THE ACTUAL PROJECT DOCUMENT
+        projectRef.delete { error in
+            if let error = error { print("❌ Project Delete Error: \(error.localizedDescription)") }
+        }
+
+        // 4. LOCAL FOLDER CLEANUP (PDFs/Drawings)
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let projectFolder = documents.appendingPathComponent(projectIdString) // Adjusted path
+        try? FileManager.default.removeItem(at: projectFolder)
+
+        // 5. UPDATE UI STATE
         DispatchQueue.main.async {
             self.projects.removeAll { $0.id == project.id }
             self.drawings.removeAll { $0.projectId == project.id }
             self.rooms.removeAll { $0.projectId == projectIdString }
+            self.savedScans.removeAll { $0.projectId == projectIdString }
             
-            if let activeId = self.activeDrawingId,
-               self.drawings.first(where: { $0.id == activeId }) == nil {
+            if self.activeDrawingId != nil && self.drawings.isEmpty {
                 self.activeDrawingId = nil
             }
-            print("✅ UI State cleaned for project: \(project.name)")
         }
     }
 }
@@ -230,117 +228,146 @@ extension AppState {
 // MARK: - Rooms & Scans
 extension AppState {
     @discardableResult
-        func createRoom(projectId: String, drawingId: UUID, name: String, pinX: Double, pinY: Double) -> Room {
-            guard let uid = Auth.auth().currentUser?.uid else { fatalError("No User") }
-            
-            let roomId = UUID().uuidString
-            let room = Room(
-                id: roomId,
-                projectId: projectId,
-                drawingId: drawingId,
-                name: name,
-                pinX: pinX,
-                pinY: pinY,
-                createdAt: Date()
-            )
-            
-            // 1. Prepare data for Firestore
-            let data: [String: Any] = [
-                "id": roomId,
-                "projectId": projectId,
-                "drawingId": drawingId.uuidString,
-                "name": name,
-                "pinX": pinX,
-                "pinY": pinY,
-                "createdAt": FieldValue.serverTimestamp()
-            ]
-            
-            // 2. Save to the sub-collection under the project
-            db.collection("users").document(uid)
-                .collection("projects").document(projectId)
-                .collection("rooms").document(roomId)
-                .setData(data)
-            
-            // 3. Update local UI
-            self.rooms.append(room)
-            
-            print("🟢 Room synced to Cloud: \(name)")
-            return room
-        }
+    func createRoom(projectId: String, drawingId: UUID, name: String, pinX: Double, pinY: Double) -> Room {
+        guard let uid = Auth.auth().currentUser?.uid else { fatalError("No User") }
+        
+        let roomId = UUID().uuidString
+        let room = Room(
+            id: roomId,
+            projectId: projectId,
+            drawingId: drawingId,
+            name: name,
+            pinX: pinX,
+            pinY: pinY,
+            createdAt: Date()
+        )
+        
+        // 1. Prepare data for Firestore
+        let data: [String: Any] = [
+            "id": roomId,
+            "projectId": projectId,
+            "drawingId": drawingId.uuidString,
+            "name": name,
+            "pinX": pinX,
+            "pinY": pinY,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        
+        // 2. Save to the sub-collection under the project
+        db.collection("users").document(uid)
+            .collection("projects").document(projectId)
+            .collection("rooms").document(roomId)
+            .setData(data)
+        
+        // 3. Update local UI
+        self.rooms.append(room)
+        
+        print("🟢 Room synced to Cloud: \(name)")
+        return room
+    }
     func loadRooms(for project: Project) {
-            guard let uid = Auth.auth().currentUser?.uid else { return }
-            
-            db.collection("users").document(uid)
-                .collection("projects").document(project.id.uuidString)
-                .collection("rooms")
-                .getDocuments { snapshot, error in
-                    guard let documents = snapshot?.documents else { return }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        
+        db.collection("users").document(uid)
+            .collection("projects").document(project.id.uuidString)
+            .collection("rooms")
+            .getDocuments { snapshot, error in
+                guard let documents = snapshot?.documents else { return }
+                
+                let loadedRooms = documents.compactMap { doc -> Room? in
+                    let data = doc.data()
+                    guard let name = data["name"] as? String,
+                          let drawingIdString = data["drawingId"] as? String,
+                          let drawingId = UUID(uuidString: drawingIdString),
+                          let pinX = data["pinX"] as? Double,
+                          let pinY = data["pinY"] as? Double,
+                          let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() else { return nil }
                     
-                    let loadedRooms = documents.compactMap { doc -> Room? in
-                        let data = doc.data()
-                        guard let name = data["name"] as? String,
-                              let drawingIdString = data["drawingId"] as? String,
-                              let drawingId = UUID(uuidString: drawingIdString),
-                              let pinX = data["pinX"] as? Double,
-                              let pinY = data["pinY"] as? Double,
-                              let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() else { return nil }
-                        
-                        return Room(id: doc.documentID, projectId: project.id.uuidString, drawingId: drawingId, name: name, pinX: pinX, pinY: pinY, createdAt: createdAt)
-                    }
-                    
-                    DispatchQueue.main.async {
-                        self.rooms = loadedRooms
-                        print("✅ Loaded \(loadedRooms.count) rooms/pins")
-                    }
+                    return Room(id: doc.documentID, projectId: project.id.uuidString, drawingId: drawingId, name: name, pinX: pinX, pinY: pinY, createdAt: createdAt)
                 }
-        }
-
+                
+                DispatchQueue.main.async {
+                    self.rooms = loadedRooms
+                    print("✅ Loaded \(loadedRooms.count) rooms/pins")
+                }
+            }
+    }
+    
     
     func addScan(projectId: String, drawingId: String, roomId: String, images: [UIImage]) async {
-        print("🚀 Starting sync for Room: \(roomId)")
+        print("🚀 Starting Local Save for Room: \(roomId)")
         
+        let scanId = UUID().uuidString
+        var localFileNames: [String] = []
+        
+        // --- STEP 1: SAVE TO IPHONE HARD DRIVE (Immediate) ---
+        for (index, image) in images.enumerated() {
+            if let data = image.jpegData(compressionQuality: 0.7) {
+                let fileName = "\(scanId)_photo_\(index).jpg"
+                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
+                
+                do {
+                    try data.write(to: url)
+                    localFileNames.append(fileName)
+                    print("💾 Saved photo locally: \(fileName)")
+                } catch {
+                    print("❌ Local Save Error: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Create the object using our local files
+        let newScan = Scan(
+            id: scanId,
+            projectId: projectId,
+            drawingId: drawingId, // Ensure your Scan struct uses 'drawingId' (fixed the 'q')
+            roomId: roomId,
+            imageFileNames: localFileNames,
+            capturedAt: Date()
+        )
+        
+        // --- STEP 2: UPDATE SCREEN INSTANTLY ---
+        // This makes the photo show up in the app without needing a signal
+        DispatchQueue.main.async {
+            self.savedScans.append(newScan)
+            print("✅ UI Updated with local scan data")
+        }
+        
+        // --- STEP 3: SYNC TO CLOUD (Background) ---
+        // We wrap this in a 'do-catch' so if the cloud fails, the local data stays safe
         do {
-            let scanId = UUID().uuidString
-            var uploadedFileNames: [String] = []
-
-            // 1. Try Storage Upload
-            for (index, image) in images.enumerated() {
-                let fileName = "photo_\(index).jpg"
+            guard let uid = Auth.auth().currentUser?.uid else { return }
+            
+            // A. Upload to Storage
+            for fileName in localFileNames {
+                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
                 let storagePath = "projects/\(projectId)/drawings/\(drawingId)/rooms/\(roomId)/scans/\(scanId)/\(fileName)"
                 let fileRef = storage.child(storagePath)
-
-                guard let imageData = image.jpegData(compressionQuality: 0.7) else {
-                    print("❌ Failed to convert image \(index) to Data")
-                    continue
-                }
-
-                print("📤 Attempting Storage upload: \(storagePath)")
-                _ = try await fileRef.putDataAsync(imageData)
-                uploadedFileNames.append(fileName)
-                print("✅ Image \(index) uploaded successfully")
+                
+                print("📤 Syncing to Cloud Storage: \(fileName)")
+                _ = try await fileRef.putFileAsync(from: url) // Syncing the file we just saved
             }
-
-            // 2. Try Firestore Save
-            guard let uid = Auth.auth().currentUser?.uid else { return }
+            
+            // B. Save to Database (Flat Path)
             let scanData: [String: Any] = [
                 "id": scanId,
                 "projectId": projectId,
                 "drawingId": drawingId,
                 "roomId": roomId,
-                "imageFileNames": uploadedFileNames,
-                "capturedAt": Timestamp(date: Date()) // Use Firebase Timestamp
+                "imageFileNames": localFileNames,
+                "capturedAt": Timestamp(date: Date()),
+                "userId": uid // Added for security rules
             ]
-
-            print("📝 Attempting Firestore scan doc creation...")
-            // NEW FLAT PATH (Reliable)
+            
             try await db.collection("users").document(uid)
                 .collection("scans").document(scanId)
                 .setData(scanData)
-                
-            print("🎉 Sync complete for scan: \(scanId)")
-
+            
+            print("🎉 Cloud Sync complete for scan: \(scanId)")
+            
         } catch {
-            print("❌ CRITICAL SYNC ERROR: \(error.localizedDescription)")
+            // If this prints, the photo is STILL on the phone, just not the cloud yet
+            print("⚠️ Background Sync Delayed (No Signal?): \(error.localizedDescription)")
         }
     }
     func loadAllProjectScans(projectId: String) {
@@ -348,7 +375,7 @@ extension AppState {
             print("❌ No User ID found")
             return
         }
-
+        
         // Direct path: users -> UID -> scans
         // We filter by projectId inside this folder. No "Collection Group" needed.
         db.collection("users").document(uid).collection("scans")
@@ -358,13 +385,13 @@ extension AppState {
                     print("❌ Permission/Query Error: \(error.localizedDescription)")
                     return
                 }
-
+                
                 guard let documents = snapshot?.documents else { return }
-
+                
                 let fetchedScans = documents.compactMap { doc -> Scan? in
                     try? doc.data(as: Scan.self)
                 }
-
+                
                 DispatchQueue.main.async {
                     self.savedScans = fetchedScans
                     print("✅ Project Scans Synced: \(fetchedScans.count) total found for \(projectId)")
@@ -376,6 +403,44 @@ extension AppState {
     }
     
     func deleteRoom(_ room: Room) {
-        rooms.removeAll { $0.id == room.id }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+
+        // 1. DELETE ROOM FROM FIRESTORE
+        db.collection("users").document(uid)
+            .collection("projects").document(room.projectId)
+            .collection("rooms").document(room.id)
+            .delete() { error in
+                if let error = error { print("❌ Room Delete Error: \(error.localizedDescription)") }
+            }
+
+        // 2. DELETE SCANS, CLOUD IMAGES, AND LOCAL IMAGES
+        db.collection("users").document(uid).collection("scans")
+            .whereField("roomId", isEqualTo: room.id)
+            .getDocuments { snapshot, error in
+                guard let documents = snapshot?.documents else { return }
+                
+                for doc in documents {
+                    if let scan = try? doc.data(as: Scan.self) {
+                        for fileName in scan.imageFileNames {
+                            // --- A. DELETE FROM CLOUD STORAGE ---
+                            let storagePath = "projects/\(scan.projectId)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/\(fileName)"
+                            self.storage.child(storagePath).delete { _ in }
+
+                            // --- B. DELETE FROM IPHONE HARD DRIVE ---
+                            let localURL = scan.getLocalURL(for: fileName)
+                            try? FileManager.default.removeItem(at: localURL)
+                            print("🗑️ Local file removed: \(fileName)")
+                        }
+                    }
+                    // --- C. DELETE SCAN RECORD FROM FIRESTORE ---
+                    doc.reference.delete()
+                }
+            }
+
+        // 3. LOCAL UI CLEANUP
+        DispatchQueue.main.async {
+            self.rooms.removeAll { $0.id == room.id }
+            self.savedScans.removeAll { $0.roomId == room.id }
+        }
     }
 }
