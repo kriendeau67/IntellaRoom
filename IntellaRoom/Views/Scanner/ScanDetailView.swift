@@ -93,73 +93,87 @@ struct ZoomableImage: View {
     @State private var isLoading = false
 
     var body: some View {
-        GeometryReader { _ in
-            Group {
-                if let image = uiImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(scale)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    scale = max(1.0, lastScale * value)
-                                }
-                                .onEnded { _ in
-                                    lastScale = scale
-                                }
-                        )
-                        .animation(.easeInOut(duration: 0.12), value: scale)
-                } else if isLoading {
-                    ProgressView("Downloading from Cloud...")
-                } else {
-                    // This shows if both local and cloud fail
-                    VStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 32))
-                            .foregroundColor(.orange)
-                        Text("Image missing")
-                        Text(url.lastPathComponent).font(.caption)
+            GeometryReader { proxy in
+                Group {
+                    if let image = uiImage {
+                        ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill() // Fill the height so it's scrollable side-to-side
+                                .frame(height: 420) // Match your container height
+                                .scaleEffect(scale)
+                                .gesture(
+                                    MagnificationGesture()
+                                        .onChanged { value in
+                                            scale = max(1.0, lastScale * value)
+                                        }
+                                        .onEnded { _ in
+                                            lastScale = scale
+                                        }
+                                )
+                        }
+                    } else if isLoading {
+                        VStack {
+                            ProgressView()
+                            Text("Loading Master...").font(.caption).padding(.top)
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 32))
+                                .foregroundColor(.orange)
+                            Text("Image missing")
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.03))
+                .cornerRadius(12)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.opacity(0.03))
-            .cornerRadius(12)
+            .frame(height: 420)
+            .onAppear {
+                loadImage()
+            }
         }
-        .frame(height: 420)
-        .onAppear {
-            loadImage()
-        }
-    }
 
     private func loadImage() {
-        // A. Try Local First
-        if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
-            self.uiImage = image
-            return
-        }
+            // 1. Try Local Master First (The fastest, high-res option)
+            if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+                self.uiImage = image
+                return
+            }
 
-        // B. Fallback to Cloud (for the iPad)
-        isLoading = true
-        let fileName = url.lastPathComponent
-        let storagePath = "projects/\(scan.projectId)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/\(fileName)"
-        let storageRef = Storage.storage().reference().child(storagePath)
+            // 2. Try Local Thumbnail (The "Instant" fallback)
+            let thumbName = url.lastPathComponent.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
+            let thumbURL = url.deletingLastPathComponent().appendingPathComponent(thumbName)
+            
+            if let thumbData = try? Data(contentsOf: thumbURL), let thumbImage = UIImage(data: thumbData) {
+                self.uiImage = thumbImage
+                // Don't return! We still want to try downloading the high-res version below.
+            }
 
-        print("☁️ iPad fetching from Cloud: \(storagePath)")
+            // 3. Fallback to Cloud for the High-Res Master
+            isLoading = true
+            let fileName = url.lastPathComponent
+            let storagePath = "projects/\(scan.projectId)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/\(fileName)"
+            let storageRef = Storage.storage().reference().child(storagePath)
 
-        storageRef.getData(maxSize: 5 * 1024 * 1024) { data, error in
-            isLoading = false
-            if let data = data, let image = UIImage(data: data) {
-                // Save it locally so the iPad has it for next time
-                try? data.write(to: url)
-                
-                DispatchQueue.main.async {
-                    self.uiImage = image
+            // UPDATED: Increased to 30MB to ensure Panos don't get cut off
+            storageRef.getData(maxSize: 30 * 1024 * 1024) { data, error in
+                isLoading = false
+                if let data = data, let image = UIImage(data: data) {
+                    // Save it locally so the iPad has it for next time
+                    try? data.write(to: url)
+                    
+                    DispatchQueue.main.async {
+                        // Smoothly swap the low-res thumb for the high-res master
+                        withAnimation {
+                            self.uiImage = image
+                        }
+                    }
+                } else {
+                    print("❌ Cloud Download Failed: \(error?.localizedDescription ?? "Unknown")")
                 }
-            } else {
-                print("❌ Cloud Download Failed: \(error?.localizedDescription ?? "Unknown")")
             }
         }
-    }
 }

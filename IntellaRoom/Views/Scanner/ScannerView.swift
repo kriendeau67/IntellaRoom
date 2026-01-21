@@ -7,6 +7,10 @@ struct ScannerView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    // NEW: State to hold the captured photo and show the camera
+        @State private var inputImage: UIImage?
+        @State private var showCamera = false
+    
     var body: some View {
         VStack(spacing: 24) {
             Text("Scanning \(room.name)")
@@ -17,66 +21,83 @@ struct ScannerView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Button("Simulate Scan") {
-                simulateScan()
-            }
-            .buttonStyle(.borderedProminent)
+            // UPDATED: Now opens the real camera instead of simulating
+                        Button(action: { showCamera = true }) {
+                            Label("Open Camera", systemImage: "camera.viewfinder")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.horizontal)
         }
         .padding()
-    }
-
-
-    private func simulateScan() {
-        // Since addScan is now "async", we wrap it in a Task
-        Task {
-            // 1. Create a fake "Image" to simulate a real photo
-            // In the next step, we'll swap this for the real camera
-            let mockImage = UIImage(systemName: "camera.shutter.button.fill") ?? UIImage()
-            
-            // 2. Call the new addScan logic
-            await appState.addScan(
-                projectId: room.projectId,
-                drawingId: drawing.id.uuidString, // We use the drawing we passed in!
-                roomId: room.id,
-                images: [mockImage] // Sending a real image object
-            )
-            
-            // 3. Close the scanner and go back to the map
-            dismiss()
+        // NEW: This triggers the actual camera view
+        .sheet(isPresented: $showCamera) {
+            // We pass the binding so the camera can dismiss itself
+            CustomCameraView(isPresented: $showCamera) { capturedUIImage in
+                // This updates the variable that your .onChange is watching
+                self.inputImage = capturedUIImage
+            }
+        }
+        // Keep your existing .onChange exactly as it is
+        .onChange(of: inputImage) { _ , newImage in
+            if let newImage = newImage {
+                saveRealScan(image: newImage)
+            }
         }
     }
 
-    private func savePlaceholderImage(named fileName: String) {
-        let size = CGSize(width: 1600, height: 2400)
-        let renderer = UIGraphicsImageRenderer(size: size)
 
-        let image = renderer.image { ctx in
-            UIColor.systemGray5.setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-
-            let text = "PLACEHOLDER WALL IMAGE"
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 48, weight: .bold),
-                .foregroundColor: UIColor.darkGray
-            ]
-
-            let textSize = text.size(withAttributes: attributes)
-            let textRect = CGRect(
-                x: (size.width - textSize.width) / 2,
-                y: (size.height - textSize.height) / 2,
-                width: textSize.width,
-                height: textSize.height
-            )
-
-            text.draw(in: textRect, withAttributes: attributes)
+    private func saveRealScan(image: UIImage) {
+            Task {
+                await appState.addScan(
+                    projectId: room.projectId,
+                    drawingId: drawing.id.uuidString,
+                    roomId: room.id,
+                    images: [image] // The actual photo from the camera!
+                )
+                dismiss()
+            }
         }
 
-        let url = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(fileName)
+}
+// Open camera
+struct ImagePicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    var sourceType: UIImagePickerController.SourceType = .camera
 
-        if let data = image.jpegData(compressionQuality: 0.9) {
-            try? data.write(to: url)
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator // This requires the Coordinator below
+        picker.sourceType = sourceType
+        picker.mediaTypes = ["public.image"]
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    // This class MUST act as the delegate for the picker to work
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: ImagePicker
+
+        init(_ parent: ImagePicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let uiImage = info[.originalImage] as? UIImage {
+                parent.image = uiImage
+            }
+            picker.dismiss(animated: true)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true)
         }
     }
 }

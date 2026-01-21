@@ -254,8 +254,10 @@ extension AppState {
         ]
         
         // 2. Save to the sub-collection under the project
+        // --- REPLACE THE db PATH IN createRoom WITH THIS ---
         db.collection("users").document(uid)
             .collection("projects").document(projectId)
+            .collection("drawings").document(drawingId.uuidString) // Added this layer
             .collection("rooms").document(roomId)
             .setData(data)
         
@@ -268,10 +270,15 @@ extension AppState {
     func loadRooms(for project: Project) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         
-        db.collection("users").document(uid)
-            .collection("projects").document(project.id.uuidString)
-            .collection("rooms")
+        // --- UPDATED: Search for ANY room collection belonging to this project ---
+        db.collectionGroup("rooms")
+            .whereField("projectId", isEqualTo: project.id.uuidString)
             .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ Room Load Error: \(error.localizedDescription)")
+                    return
+                }
+                
                 guard let documents = snapshot?.documents else { return }
                 
                 let loadedRooms = documents.compactMap { doc -> Room? in
@@ -283,12 +290,20 @@ extension AppState {
                           let pinY = data["pinY"] as? Double,
                           let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() else { return nil }
                     
-                    return Room(id: doc.documentID, projectId: project.id.uuidString, drawingId: drawingId, name: name, pinX: pinX, pinY: pinY, createdAt: createdAt)
+                    return Room(
+                        id: doc.documentID,
+                        projectId: project.id.uuidString,
+                        drawingId: drawingId,
+                        name: name,
+                        pinX: pinX,
+                        pinY: pinY,
+                        createdAt: createdAt
+                    )
                 }
                 
                 DispatchQueue.main.async {
                     self.rooms = loadedRooms
-                    print("✅ Loaded \(loadedRooms.count) rooms/pins")
+                    print("✅ Loaded \(loadedRooms.count) rooms/pins from nested hierarchy")
                 }
             }
     }
@@ -302,14 +317,25 @@ extension AppState {
         
         // --- STEP 1: SAVE TO IPHONE HARD DRIVE (Immediate) ---
         for (index, image) in images.enumerated() {
-            if let data = image.jpegData(compressionQuality: 0.7) {
-                let fileName = "\(scanId)_photo_\(index).jpg"
+            if let data = image.jpegData(compressionQuality: 1.0) {                let fileName = "\(scanId)_photo_\(index).jpg"
                 let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
                 
                 do {
                     try data.write(to: url)
                     localFileNames.append(fileName)
                     print("💾 Saved photo locally: \(fileName)")
+                    
+                    // --- ADD THIS RIGHT AFTER: try data.write(to: url) ---
+
+                    let thumbName = fileName.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
+                    let thumbUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(thumbName)
+
+                    let thumbnail = createThumbnail(from: image)
+                    if let thumbData = thumbnail.jpegData(compressionQuality: 0.6) {
+                        try? thumbData.write(to: thumbUrl)
+                        print("💾 Saved thumbnail locally: \(thumbName)")
+                    }
+                    
                 } catch {
                     print("❌ Local Save Error: \(error.localizedDescription)")
                 }
@@ -346,6 +372,12 @@ extension AppState {
                 
                 print("📤 Syncing to Cloud Storage: \(fileName)")
                 _ = try await fileRef.putFileAsync(from: url) // Syncing the file we just saved
+                
+                let thumbName = fileName.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
+                let thumbUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(thumbName)
+                let thumbStoragePath = "projects/\(projectId)/drawings/\(drawingId)/rooms/\(roomId)/scans/\(scanId)/\(thumbName)"
+                let thumbRef = storage.child(thumbStoragePath)
+                print("📤 Syncing Thumbnail to Cloud: \(thumbName)")
             }
             
             // B. Save to Database (Flat Path)
@@ -359,9 +391,19 @@ extension AppState {
                 "userId": uid // Added for security rules
             ]
             
+            // --- REPLACE THE db PATH IN addScan WITH THIS ---
             try await db.collection("users").document(uid)
+                .collection("projects").document(projectId)
+                .collection("drawings").document(drawingId) // Added this layer
+                .collection("rooms").document(roomId)
                 .collection("scans").document(scanId)
                 .setData(scanData)
+            // This toggles the 'isUploaded' status in your UI immediately
+            DispatchQueue.main.async {
+                if let index = self.savedScans.firstIndex(where: { $0.id == scanId }) {
+                    self.savedScans[index].isUploaded = true
+                }
+            }
             
             print("🎉 Cloud Sync complete for scan: \(scanId)")
             
@@ -371,30 +413,35 @@ extension AppState {
         }
     }
     func loadAllProjectScans(projectId: String) {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            print("❌ No User ID found")
-            return
-        }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
         
-        // Direct path: users -> UID -> scans
-        // We filter by projectId inside this folder. No "Collection Group" needed.
-        db.collection("users").document(uid).collection("scans")
+        db.collectionGroup("scans")
+            .whereField("userId", isEqualTo: uid)
             .whereField("projectId", isEqualTo: projectId)
             .addSnapshotListener { snapshot, error in
                 if let error = error {
-                    print("❌ Permission/Query Error: \(error.localizedDescription)")
+                    print("❌ Query Error: \(error.localizedDescription)")
                     return
                 }
                 
-                guard let documents = snapshot?.documents else { return }
+                // 1. Check if ANY raw data came back from the cloud
+                print("DEBUG: Raw documents found in cloud: \(snapshot?.documents.count ?? 0)")
                 
-                let fetchedScans = documents.compactMap { doc -> Scan? in
-                    try? doc.data(as: Scan.self)
-                }
+                let fetchedScans = snapshot?.documents.compactMap { doc -> Scan? in
+                    let decodedScan = try? doc.data(as: Scan.self)
+                    
+                    // 2. Check if the app is struggling to turn the cloud data into a Scan struct
+                    if decodedScan == nil {
+                        print("❌ DEBUG: Failed to decode document ID: \(doc.documentID)")
+                    }
+                    
+                    return decodedScan
+                } ?? []
                 
                 DispatchQueue.main.async {
                     self.savedScans = fetchedScans
-                    print("✅ Project Scans Synced: \(fetchedScans.count) total found for \(projectId)")
+                    // 3. Confirm what the UI is actually receiving
+                    print("✅ DEBUG: self.savedScans updated. Count: \(self.savedScans.count)")
                 }
             }
     }
@@ -441,6 +488,13 @@ extension AppState {
         DispatchQueue.main.async {
             self.rooms.removeAll { $0.id == room.id }
             self.savedScans.removeAll { $0.roomId == room.id }
+        }
+    }
+    // Resize Pano to Thumbnail
+    func createThumbnail(from image: UIImage, targetSize: CGSize = CGSize(width: 400, height: 200)) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
     }
 }
