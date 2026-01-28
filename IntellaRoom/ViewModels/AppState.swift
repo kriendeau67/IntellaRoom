@@ -308,79 +308,80 @@ extension AppState {
             }
     }
     
-    
-    func addScan(projectId: String, drawingId: String, roomId: String, images: [UIImage]) async {
+    func addScan(projectId: String, drawingId: String, roomId: String, roomName: String, scanDataItems: [Data]) async {
         print("🚀 Starting Local Save for Room: \(roomId)")
         
         let scanId = UUID().uuidString
         var localFileNames: [String] = []
         
-        // --- STEP 1: SAVE TO IPHONE HARD DRIVE (Immediate) ---
-        for (index, image) in images.enumerated() {
-            if let data = image.jpegData(compressionQuality: 1.0) {                let fileName = "\(scanId)_photo_\(index).jpg"
-                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
-                
-                do {
-                    try data.write(to: url)
-                    localFileNames.append(fileName)
-                    print("💾 Saved photo locally: \(fileName)")
-                    
-                    // --- ADD THIS RIGHT AFTER: try data.write(to: url) ---
+        // --- NEW: Sanitize the room name for filenames ---
+        let sanitizedRoomName = roomName.components(separatedBy: CharacterSet.alphanumerics.inverted).joined(separator: "_")
+        let timestamp = Int(Date().timeIntervalSince1970)
 
+        // --- STEP 1: SAVE RAW BYTES TO IPHONE ---
+        for (index, data) in scanDataItems.enumerated() {
+            // Use the Room Name + Index + Time for easy identification in Firebase
+            let fileName = "\(sanitizedRoomName)_\(index)_\(timestamp).jpg"
+            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
+            
+            do {
+                // Write high-res bytes directly
+                try data.write(to: url)
+                localFileNames.append(fileName)
+                print("💾 Saved high-res photo locally: \(fileName)")
+                
+                // --- STEP 2: CREATE THUMBNAIL ---
+                if let fullImage = UIImage(data: data) {
                     let thumbName = fileName.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
                     let thumbUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(thumbName)
-
-                    let thumbnail = createThumbnail(from: image)
-                    if let thumbData = thumbnail.jpegData(compressionQuality: 0.6) {
+                    
+                    let thumbnail = createThumbnail(from: fullImage)
+                    if let thumbData = thumbnail.jpegData(compressionQuality: 0.5) {
                         try? thumbData.write(to: thumbUrl)
                         print("💾 Saved thumbnail locally: \(thumbName)")
                     }
-                    
-                } catch {
-                    print("❌ Local Save Error: \(error.localizedDescription)")
                 }
+            } catch {
+                print("❌ Local Save Error: \(error.localizedDescription)")
             }
         }
         
-        // Create the object using our local files
+        // Create the Scan object
         let newScan = Scan(
             id: scanId,
             projectId: projectId,
-            drawingId: drawingId, // Ensure your Scan struct uses 'drawingId' (fixed the 'q')
+            drawingId: drawingId,
             roomId: roomId,
             imageFileNames: localFileNames,
             capturedAt: Date()
         )
         
-        // --- STEP 2: UPDATE SCREEN INSTANTLY ---
-        // This makes the photo show up in the app without needing a signal
+        // --- STEP 3: UPDATE UI ---
         DispatchQueue.main.async {
             self.savedScans.append(newScan)
             print("✅ UI Updated with local scan data")
         }
         
-        // --- STEP 3: SYNC TO CLOUD (Background) ---
-        // We wrap this in a 'do-catch' so if the cloud fails, the local data stays safe
+        // --- STEP 4: SYNC TO CLOUD ---
         do {
             guard let uid = Auth.auth().currentUser?.uid else { return }
             
-            // A. Upload to Storage
             for fileName in localFileNames {
                 let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
                 let storagePath = "projects/\(projectId)/drawings/\(drawingId)/rooms/\(roomId)/scans/\(scanId)/\(fileName)"
                 let fileRef = storage.child(storagePath)
                 
-                print("📤 Syncing to Cloud Storage: \(fileName)")
-                _ = try await fileRef.putFileAsync(from: url) // Syncing the file we just saved
+                print("📤 Syncing High-Res to Cloud: \(fileName)")
+                _ = try await fileRef.putFileAsync(from: url)
                 
+                // Sync Thumbnail
                 let thumbName = fileName.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
                 let thumbUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(thumbName)
                 let thumbStoragePath = "projects/\(projectId)/drawings/\(drawingId)/rooms/\(roomId)/scans/\(scanId)/\(thumbName)"
-                let thumbRef = storage.child(thumbStoragePath)
-                print("📤 Syncing Thumbnail to Cloud: \(thumbName)")
+                try await storage.child(thumbStoragePath).putFileAsync(from: thumbUrl)
             }
             
-            // B. Save to Database (Flat Path)
+            // Save metadata to Firestore
             let scanData: [String: Any] = [
                 "id": scanId,
                 "projectId": projectId,
@@ -388,17 +389,16 @@ extension AppState {
                 "roomId": roomId,
                 "imageFileNames": localFileNames,
                 "capturedAt": Timestamp(date: Date()),
-                "userId": uid // Added for security rules
+                "userId": uid
             ]
             
-            // --- REPLACE THE db PATH IN addScan WITH THIS ---
             try await db.collection("users").document(uid)
                 .collection("projects").document(projectId)
-                .collection("drawings").document(drawingId) // Added this layer
+                .collection("drawings").document(drawingId)
                 .collection("rooms").document(roomId)
                 .collection("scans").document(scanId)
                 .setData(scanData)
-            // This toggles the 'isUploaded' status in your UI immediately
+
             DispatchQueue.main.async {
                 if let index = self.savedScans.firstIndex(where: { $0.id == scanId }) {
                     self.savedScans[index].isUploaded = true
@@ -408,8 +408,7 @@ extension AppState {
             print("🎉 Cloud Sync complete for scan: \(scanId)")
             
         } catch {
-            // If this prints, the photo is STILL on the phone, just not the cloud yet
-            print("⚠️ Background Sync Delayed (No Signal?): \(error.localizedDescription)")
+            print("⚠️ Sync Delayed: \(error.localizedDescription)")
         }
     }
     func loadAllProjectScans(projectId: String) {
@@ -449,42 +448,58 @@ extension AppState {
         savedScans.filter { $0.roomId == room.id }.sorted { $0.capturedAt < $1.capturedAt }
     }
     
-    func deleteRoom(_ room: Room) {
+    func deleteRoom(_ room: Room, drawingId: String) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
 
-        // 1. DELETE ROOM FROM FIRESTORE
+        // 1. CORRECT PATH: DELETE ROOM FROM FIRESTORE
+        // We must include the "drawings" collection in the path
         db.collection("users").document(uid)
             .collection("projects").document(room.projectId)
+            .collection("drawings").document(drawingId)
             .collection("rooms").document(room.id)
             .delete() { error in
                 if let error = error { print("❌ Room Delete Error: \(error.localizedDescription)") }
             }
 
-        // 2. DELETE SCANS, CLOUD IMAGES, AND LOCAL IMAGES
-        db.collection("users").document(uid).collection("scans")
-            .whereField("roomId", isEqualTo: room.id)
-            .getDocuments { snapshot, error in
-                guard let documents = snapshot?.documents else { return }
-                
-                for doc in documents {
-                    if let scan = try? doc.data(as: Scan.self) {
-                        for fileName in scan.imageFileNames {
-                            // --- A. DELETE FROM CLOUD STORAGE ---
-                            let storagePath = "projects/\(scan.projectId)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/\(fileName)"
-                            self.storage.child(storagePath).delete { _ in }
+        // 2. CORRECT PATH: FIND SCANS IN THE NESTED PATH
+        let scansRef = db.collection("users").document(uid)
+            .collection("projects").document(room.projectId)
+            .collection("drawings").document(drawingId)
+            .collection("rooms").document(room.id)
+            .collection("scans")
 
-                            // --- B. DELETE FROM IPHONE HARD DRIVE ---
-                            let localURL = scan.getLocalURL(for: fileName)
-                            try? FileManager.default.removeItem(at: localURL)
-                            print("🗑️ Local file removed: \(fileName)")
-                        }
+        scansRef.getDocuments { snapshot, error in
+            guard let documents = snapshot?.documents else { return }
+            
+            for doc in documents {
+                if let scan = try? doc.data(as: Scan.self) {
+                    for fileName in scan.imageFileNames {
+                        
+                        // --- A. DELETE FROM CLOUD STORAGE (Photo + Thumbnail) ---
+                        let storagePath = "projects/\(scan.projectId)/drawings/\(scan.drawingId)/rooms/\(scan.roomId)/scans/\(scan.id)/"
+                        
+                        // Delete Main Photo
+                        self.storage.child("\(storagePath)\(fileName)").delete { _ in }
+                        
+                        // Delete Thumbnail (Crucial to prevent orphans)
+                        let thumbName = fileName.replacingOccurrences(of: ".jpg", with: "_thumb.jpg")
+                        self.storage.child("\(storagePath)\(thumbName)").delete { _ in }
+
+                        // --- B. DELETE FROM IPHONE HARD DRIVE ---
+                        let localURL = scan.getLocalURL(for: fileName)
+                        try? FileManager.default.removeItem(at: localURL)
+                        
+                        // Also delete local thumbnail
+                        let localThumbURL = localURL.deletingLastPathComponent().appendingPathComponent(thumbName)
+                        try? FileManager.default.removeItem(at: localThumbURL)
                     }
-                    // --- C. DELETE SCAN RECORD FROM FIRESTORE ---
-                    doc.reference.delete()
                 }
+                // --- C. DELETE SCAN RECORD ---
+                doc.reference.delete()
             }
+        }
 
-        // 3. LOCAL UI CLEANUP
+        // 3. UI CLEANUP
         DispatchQueue.main.async {
             self.rooms.removeAll { $0.id == room.id }
             self.savedScans.removeAll { $0.roomId == room.id }

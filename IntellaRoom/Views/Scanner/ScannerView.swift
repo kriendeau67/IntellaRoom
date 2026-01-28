@@ -1,5 +1,7 @@
 import SwiftUI
 
+import SwiftUI
+
 struct ScannerView: View {
     let room: Room
     let drawing: Drawing
@@ -7,60 +9,68 @@ struct ScannerView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    // NEW: State to hold the captured photo and show the camera
-        @State private var inputImage: UIImage?
-        @State private var showCamera = false
-    
+    // UPDATED: Now holds Data instead of UIImage to preserve resolution
+    @State private var capturedData: Data?
+    @State private var showCamera = false
+    @State private var isSaving = false
+
     var body: some View {
         VStack(spacing: 24) {
-            Text("Scanning \(room.name)")
+            Text(isSaving ? "Saving High-Res Scan..." : "Scanning \(room.name)")
                 .font(.title2)
                 .bold()
 
-            Text("Pin: (\(room.pinX), \(room.pinY))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            // UPDATED: Now opens the real camera instead of simulating
-                        Button(action: { showCamera = true }) {
-                            Label("Open Camera", systemImage: "camera.viewfinder")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding()
+            if isSaving {
+                            // Show a more prominent spinner during the upload
+                            ProgressView()
+                                .controlSize(.large)
+                            Text("Preserving full detail...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Pin: (\(room.pinX), \(room.pinY))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ProgressView("Opening Camera...")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.horizontal)
-        }
-        .padding()
-        // NEW: This triggers the actual camera view
+                    }
+                    .padding()
+        // --- STEP 1: AUTO-OPEN CAMERA ---
+                    .onAppear {
+                                // Only auto-open if we haven't already captured data
+                                if capturedData == nil {
+                                    showCamera = true
+                                }
+                            }
+        
         .sheet(isPresented: $showCamera) {
-            // We pass the binding so the camera can dismiss itself
-            CustomCameraView(isPresented: $showCamera) { capturedUIImage in
-                // This updates the variable that your .onChange is watching
-                self.inputImage = capturedUIImage
+            // UPDATED: The closure now receives Data (rawData)
+            CustomCameraView(isPresented: $showCamera) { rawData in
+                self.isSaving = true
+                self.capturedData = rawData
             }
         }
-        // Keep your existing .onChange exactly as it is
-        .onChange(of: inputImage) { _ , newImage in
-            if let newImage = newImage {
-                saveRealScan(image: newImage)
+        // UPDATED: Watching for capturedData changes
+        .onChange(of: capturedData) { _ , newData in
+            if let data = newData {
+                saveRealScan(data: data)
             }
         }
     }
 
-
-    private func saveRealScan(image: UIImage) {
-            Task {
-                await appState.addScan(
-                    projectId: room.projectId,
-                    drawingId: drawing.id.uuidString,
-                    roomId: room.id,
-                    images: [image] // The actual photo from the camera!
-                )
-                dismiss()
-            }
+    // UPDATED: Processes Data and includes roomName for the filename
+    private func saveRealScan(data: Data) {
+        Task {
+            await appState.addScan(
+                projectId: room.projectId,
+                drawingId: drawing.id.uuidString,
+                roomId: room.id,
+                roomName: room.name,      // NEW: Added the room name here
+                scanDataItems: [data]     // NEW: Renamed parameter to scanDataItems
+            )
+            dismiss()
         }
-
+    }
 }
 // Open camera
 struct ImagePicker: UIViewControllerRepresentable {

@@ -12,6 +12,7 @@ struct ProjectCaptureView: View {
     @State private var pendingRoomName: String = ""
     @State private var pendingPinPoint: CGPoint?
 
+    
     enum ActiveSheet: Identifiable {
         case roomPrompt
         case scanner(Room, Drawing)
@@ -92,7 +93,7 @@ struct ProjectCaptureView: View {
 
         // Sheet 2 — tap room pin → see scans in that room
         .sheet(item: $selectedRoom) { room in
-            RoomScansSheet(room: room)
+            RoomScansSheet(room: room, drawing: self.drawing)
                 .environmentObject(appState)
         }
     }
@@ -100,7 +101,8 @@ struct ProjectCaptureView: View {
 
 private struct RoomScansSheet: View {
     let room: Room
-
+    let drawing: Drawing
+    
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
@@ -154,7 +156,8 @@ private struct RoomScansSheet: View {
             }
             .alert("Delete Room?", isPresented: $showDeleteConfirmation) {
                 Button("Delete Room", role: .destructive) {
-                    appState.deleteRoom(room)
+                  //  appState.deleteRoom(room)
+                    appState.deleteRoom(room, drawingId: drawing.id.uuidString)
                     dismiss()
                 }
 
